@@ -1,12 +1,12 @@
 package main
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
-
-// 特定の値の場合他のgoroutineをやめるor捨てるs
 
 const (
 	Green = 0
@@ -16,42 +16,62 @@ const (
 func main() {
 
 	lgr, _ := zap.NewDevelopment()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	for _, v := range [][]bool{{true, true, true}, {true, false, true}, {false, false, true}} {
+	listInList := [][]bool{{true, true, true}, {true, false, true}, {false, false, true}}
+	signal := make(chan int, 8)
+	for _, v := range listInList {
+		AllOK(lgr, v, signal)
 
-		go func(v []bool) {
-			if AllOK(lgr, v) {
-				lgr.Info("AllOK")
-			} else {
-				lgr.Info("Something Error happend")
+		select {
+		case sig := <-signal:
+			switch {
+			case sig == Green:
+				lgr.Debug("Green")
+			case sig == Red:
+				lgr.Debug("Red")
 			}
-		}(v)
+		case <-ctx.Done():
+			lgr.Debug("Timeout happend.")
+		}
 	}
 
-	// time.Sleep(3 * time.Second)
-
 }
 
-func AllOK(logger *zap.Logger, bl []bool) bool {
-	return Status(logger, bl) == Green
-}
+func AllOK(lgr *zap.Logger, li []bool, signal chan<- int) {
 
-func Status(lgr *zap.Logger, list []bool) int {
-	signal := Green
+	var status int
 
 	wg := new(sync.WaitGroup)
-	for _, v := range list {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		status = Status(lgr, li)
+	}()
+	wg.Wait()
 
+	if status == 0 {
+		signal <- Green
+	} else {
+		signal <- Red
+	}
+}
+
+func Status(lgr *zap.Logger, li []bool) int {
+
+	status := 0
+
+	wg := new(sync.WaitGroup)
+	for _, v := range li {
 		wg.Add(1)
-
 		go func(v bool) {
 			defer wg.Done()
 			if !v {
-				signal = Red
+				status = 1
 			}
 		}(v)
 	}
 	wg.Wait()
-
-	return signal
+	return status
 }
